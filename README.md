@@ -1,2 +1,2 @@
 # luma-long-horizon-agents
-Luma Hackathon September 25, 2026 - Long Horizon Agents
+Submission for Long Horizon Agents Hackathon on September 25, 2026 in San Francisco, CA.
