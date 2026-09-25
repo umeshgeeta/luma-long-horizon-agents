@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Horizon supervisor</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: system-ui, sans-serif;
+      line-height: 1.4;
+    }
+    body {
+      margin: 0;
+      padding: 16px;
+    }
+    h1 {
+      font-size: 1.25rem;
+      font-weight: 500;
+      margin: 0 0 12px;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) minmax(280px, 1.2fr);
+      gap: 16px;
+      align-items: start;
+    }
+    section {
+      border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    h2 {
+      font-size: 0.95rem;
+      font-weight: 500;
+      margin: 0 0 8px;
+    }
+    form {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    input[type="text"] {
+      flex: 1;
+      font: inherit;
+      padding: 8px;
+    }
+    button {
+      font: inherit;
+      padding: 8px 12px;
+    }
+    p.status {
+      min-height: 1.4em;
+      margin: 0 0 12px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 6px 4px;
+      border-bottom: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+      vertical-align: top;
+    }
+    tr.selected {
+      background: color-mix(in srgb, CanvasText 8%, transparent);
+    }
+    tr.agent {
+      cursor: pointer;
+    }
+    .goal {
+      display: block;
+      color: color-mix(in srgb, CanvasText 70%, transparent);
+    }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .counts {
+      margin: 0 0 8px;
+    }
+    ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+    li {
+      margin: 4px 0;
+    }
+    @media (max-width: 720px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>Horizon supervisor</h1>
+  <div class="layout">
+    <section>
+      <h2>Instruction</h2>
+      <form id="launch-form">
+        <label class="visually-hidden" for="instruction">Instruction</label>
+        <input id="instruction" type="text" name="instruction" placeholder="Nimble search for long-horizon agent memory" autocomplete="off">
+        <button type="submit">Launch</button>
+      </form>
+      <p id="status" class="status" role="status"></p>
+      <h2>Managed sessions</h2>
+      <button id="refresh" type="button">Refresh</button>
+      <table>
+        <thead>
+          <tr><th>Session</th></tr>
+        </thead>
+        <tbody id="agents"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Timeline</h2>
+      <div class="toolbar">
+        <button id="compact" type="button" disabled>Compact</button>
+        <button id="terminate" type="button" disabled>Terminate</button>
+      </div>
+      <p id="counts" class="counts">Select a session.</p>
+      <div id="state"></div>
+      <ul id="events"></ul>
+    </section>
+  </div>
+  <style>
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+    }
+  </style>
+  <script>
+    const statusEl = document.getElementById("status");
+    const agentsEl = document.getElementById("agents");
+    const countsEl = document.getElementById("counts");
+    const stateEl = document.getElementById("state");
+    const eventsEl = document.getElementById("events");
+    const compactBtn = document.getElementById("compact");
+    const terminateBtn = document.getElementById("terminate");
+    let selected = "";
+    let busy = false;
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    async function readJson(response) {
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || data.message || response.statusText);
+      }
+      return data;
+    }
+
+    async function loadAgents() {
+      const data = await readJson(await fetch("/api/agents"));
+      agentsEl.replaceChildren();
+      for (const agent of data.agents || []) {
+        const row = document.createElement("tr");
+        row.className = "agent" + (agent.agent_id === selected ? " selected" : "");
+        const cell = document.createElement("td");
+        cell.textContent = agent.name || agent.agent_id;
+        const goal = document.createElement("span");
+        goal.className = "goal";
+        goal.textContent = (agent.state || "active") + " — " + (agent.goal || "");
+        cell.append(document.createElement("br"), goal);
+        row.dataset.id = agent.agent_id;
+        row.append(cell);
+        row.addEventListener("click", () => selectAgent(agent.agent_id));
+        agentsEl.append(row);
+      }
+      if (!data.agents || data.agents.length === 0) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.textContent = "No sessions yet.";
+        row.append(cell);
+        agentsEl.append(row);
+      }
+    }
+
+    function renderTimeline(timeline) {
+      const state = timeline.working_state;
+      countsEl.textContent = "visible " + timeline.visible_count + " · hidden " + timeline.hidden_count;
+      stateEl.replaceChildren();
+      if (state) {
+        const goal = document.createElement("p");
+        goal.textContent = "Goal: " + (state.goal || "");
+        const source = document.createElement("p");
+        source.textContent = "Source: " + (state.source || "");
+        stateEl.append(goal, source);
+        for (const fact of state.facts || []) {
+          const line = document.createElement("p");
+          line.textContent = "Fact: " + fact;
+          stateEl.append(line);
+        }
+        for (const decision of state.decisions || []) {
+          const line = document.createElement("p");
+          line.textContent = "Decision: " + decision;
+          stateEl.append(line);
+        }
+      }
+      eventsEl.replaceChildren();
+      for (const event of timeline.events || []) {
+        const item = document.createElement("li");
+        item.textContent = "#" + event.seq + " " + event.kind + ": " + event.summary;
+        eventsEl.append(item);
+      }
+    }
+
+    async function refreshView() {
+      if (busy) return;
+      await loadAgents();
+      if (!selected) return;
+      const stillThere = [...document.querySelectorAll("#agents tr.agent")].some(
+        (row) => row.dataset.id === selected
+      );
+      if (!stillThere) {
+        selected = "";
+        compactBtn.disabled = true;
+        terminateBtn.disabled = true;
+        countsEl.textContent = "Select a session.";
+        stateEl.replaceChildren();
+        eventsEl.replaceChildren();
+        return;
+      }
+      const timeline = await readJson(await fetch("/api/timeline?agent_id=" + encodeURIComponent(selected)));
+      renderTimeline(timeline);
+    }
+
+    async function selectAgent(agentId) {
+      selected = agentId;
+      compactBtn.disabled = false;
+      terminateBtn.disabled = false;
+      await loadAgents();
+      const timeline = await readJson(await fetch("/api/timeline?agent_id=" + encodeURIComponent(agentId)));
+      renderTimeline(timeline);
+    }
+
+    document.getElementById("launch-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const instruction = document.getElementById("instruction").value;
+      setStatus("Starting…");
+      busy = true;
+      try {
+        const data = await readJson(await fetch("/api/launch", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({instruction}),
+        }));
+        setStatus(data.message || "");
+        if (data.ok) {
+          document.getElementById("instruction").value = "";
+        }
+        await loadAgents();
+      } catch (err) {
+        setStatus(err.message);
+      } finally {
+        busy = false;
+      }
+    });
+
+    document.getElementById("refresh").addEventListener("click", async () => {
+      try {
+        await refreshView();
+        setStatus("Refreshed.");
+      } catch (err) {
+        setStatus(err.message);
+      }
+    });
+
+    compactBtn.addEventListener("click", async () => {
+      if (!selected) return;
+      compactBtn.disabled = true;
+      busy = true;
+      setStatus("Compacting…");
+      try {
+        await readJson(await fetch("/api/compact", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({agent_id: selected}),
+        }));
+        const timeline = await readJson(await fetch("/api/timeline?agent_id=" + encodeURIComponent(selected)));
+        renderTimeline(timeline);
+        setStatus("Compacted.");
+      } catch (err) {
+        setStatus(err.message);
+      } finally {
+        busy = false;
+        compactBtn.disabled = !selected;
+      }
+    });
+
+    terminateBtn.addEventListener("click", async () => {
+      if (!selected) return;
+      const agentId = selected;
+      terminateBtn.disabled = true;
+      busy = true;
+      setStatus("Terminating…");
+      try {
+        await readJson(await fetch("/api/terminate", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({agent_id: agentId}),
+        }));
+        if (selected === agentId) {
+          selected = "";
+          compactBtn.disabled = true;
+          terminateBtn.disabled = true;
+          countsEl.textContent = "Select a session.";
+          stateEl.replaceChildren();
+          eventsEl.replaceChildren();
+        }
+        await loadAgents();
+        setStatus("Terminated.");
+      } catch (err) {
+        setStatus(err.message);
+        terminateBtn.disabled = !selected;
+      } finally {
+        busy = false;
+      }
+    });
+
+    loadAgents().catch((err) => setStatus(err.message));
+    setInterval(() => {
+      refreshView().catch(() => {});
+    }, 3000);
+  </script>
+</body>
+</html>
