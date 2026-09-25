@@ -16,7 +16,13 @@ src/.venv/bin/python supervisor/app.py
 
 Open http://127.0.0.1:8780. Horizon listens at http://127.0.0.1:8765/mcp.
 
-`src/config.json` is local and not committed. It needs `rawtree_api_key` and `nimble_api_key`.
+Copy the template and fill in your keys before starting either process. `src/config.json` stays local.
+
+```bash
+cp src/config.example.json src/config.json
+```
+
+`rawtree_api_key` is the RawTree key. `nimble_api_key` is the Nimble key.
 
 ## Using the page
 
