@@ -217,5 +217,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Local API keys
+# Local API keys and the project virtualenv
 src/config.json
+src/.venv/
